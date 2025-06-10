@@ -1,4 +1,4 @@
-﻿using LibMapCommon.IO;
+using LibMapCommon.IO;
 using System.Text;
 
 namespace LibMapCommon;
@@ -22,7 +22,7 @@ public class CachedHttpClient
 		var directory = CacheDir?.Exists is true ? CacheDir.FullName : Path.GetTempPath();
 		var filePath = new FileInfo(Path.Combine(directory, fileName));
 
-		await using var mutex = await AsyncMutex.AcquireAsync("Global\\" + HashString(filePath.FullName));
+		await using var mutex = await AsyncMutex.AcquireAsync(HashString(filePath.FullName));
 
 		using var request = new HttpRequestMessage(HttpMethod.Get, url);
 
@@ -64,7 +64,7 @@ public class CachedHttpClient
 		{
 			var fileName = UrlToFileName(url);
 			var filePath = Path.Combine(CacheDir.FullName, fileName);
-			await using var mutex = await AsyncMutex.AcquireAsync("Global\\" + fileName);
+			await using var mutex = await AsyncMutex.AcquireAsync(fileName);
 
 			if (File.Exists(filePath) && File.ReadAllBytes(filePath) is byte[] b && b.Length > 0)
 				return b;
