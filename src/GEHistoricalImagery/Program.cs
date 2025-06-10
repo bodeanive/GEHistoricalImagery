@@ -1,45 +1,35 @@
-﻿using CommandLine;
-using GEHistoricalImagery.Cli;
-using System.Diagnostics.CodeAnalysis;
+using GEHistoricalImagery.Services;
 
-namespace GEHistoricalImagery;
+var builder = WebApplication.CreateBuilder(args);
 
-public enum ExitCode
+// 1. 添加服务到依赖注入容器
+builder.Services.AddControllers();
+
+// 将 ImageryService 注册为单例服务。
+// 根据你的缓存策略，你可能希望使用 AddScoped 或 AddTransient。
+var disableCache = builder.Configuration.GetValue<bool>("NoCache");
+builder.Services.AddSingleton(new ImageryService(disableCache));
+
+
+// 添加 Swagger 用于 API 文档和测试 (可选，但强烈推荐)
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+var app = builder.Build();
+
+// 2. 配置 HTTP 请求处理管道
+if (app.Environment.IsDevelopment())
 {
-	ProcessCompletedSuccessfully = 0,
-	NonRunNonError = 1,
-	ParseError = 2,
-	RunTimeError = 3
+    app.UseSwagger();
+    app.UseSwaggerUI();
 }
 
-internal class Program
-{
-	private static void ConfigureParser(ParserSettings settings)
-	{
-		settings.AutoVersion = true;
-		settings.AutoHelp = true;
-		settings.HelpWriter = Console.Error;
-		settings.CaseInsensitiveEnumValues = true;
-	}
+// (可选) 如果你准备使用 Nginx 处理 HTTPS，可以注释掉下面这行
+// app.UseHttpsRedirection();
 
-	[STAThread]
-	[DynamicDependency(DynamicallyAccessedMemberTypes.All, typeof(Info))]
-	[DynamicDependency(DynamicallyAccessedMemberTypes.All, typeof(Availability))]
-	[DynamicDependency(DynamicallyAccessedMemberTypes.All, typeof(Download))]
-	[DynamicDependency(DynamicallyAccessedMemberTypes.All, typeof(Dump))]
-	private static async Task Main(string[] args)
-	{
-		var parser = new Parser(ConfigureParser);
+app.UseAuthorization();
 
-		var result = parser.ParseArguments(args, typeof(Info), typeof(Availability), typeof(Download), typeof(Dump));
+app.MapControllers();
 
-		try
-		{
-			await result.WithParsedAsync<OptionsBase>(opt => opt.RunAsync());
-		}
-		catch (Exception ex)
-		{
-			Console.Error.WriteLine("An error occurred:\r\n\r\n" + ex.ToString());
-		}
-	}
-}
+// 启动应用
+app.Run();
