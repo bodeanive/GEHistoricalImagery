@@ -19,19 +19,13 @@ GEHistoricalImagery is a utility for downloading historical aerial imagery from 
 |[dump](https://github.com/Mbucari/GEHistoricalImagery/blob/master/docs/dump.md)|Dump historical image tiles into a folder.|
 
 ************************
-## Build and Run on Linux (x64 and arm64)
-
-Ideally you should use the Release binary packaged, but I've provided `gehinix.sh` to download, build and run GEHistoricalImagery.
-
-The script will:
-- download and install the dotnet sdk (if necessary)
-- Clone and build the master branch of this repo (if necessary)
-- And finally run GEHistoricalImagery with arguments
-
+## Build 
 ```console
-wget https://raw.githubusercontent.com/Mbucari/GEHistoricalImagery/refs/heads/master/gehinix.sh
-chmod +x gehinix.sh
-./gehinix.sh
+dotnet publish -c Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true
+dotnet publish -c Release --runtime win-arm64 --self-contained true -p:PublishSingleFile=true
+
+dotnet publish -c Release --runtime linux-x64 --self-contained true -p:PublishSingleFile=true
+dotnet publish -c Release --runtime linux-arm64 --self-contained true -p:PublishSingleFile=true
 ```
 
 ************************
