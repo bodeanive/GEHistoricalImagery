@@ -1,78 +1,56 @@
-﻿namespace LibMapCommon.IO;
+using System;
+using System.Collections.Concurrent;
+using System.Threading;
+using System.Threading.Tasks;
 
-internal static class AsyncMutex
+namespace LibMapCommon.IO
 {
-	private const int MaxValueTasks = 10;
-	private static readonly CachedValueTaskSource<IAsyncDisposable> ValueTaskSources = new(MaxValueTasks);
+    /// <summary>
+    /// A cross-platform, asynchronous mutual exclusion lock provider.
+    /// It provides a unique lock for each key (name), ensuring thread safety for resource access within this process.
+    /// </summary>
+    internal static class AsyncMutex
+    {
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> Semaphores = new ConcurrentDictionary<string, SemaphoreSlim>();
 
-	public static ValueTask<IAsyncDisposable> AcquireAsync(string mutexName, CancellationToken cancellationToken = default)
-	{
-		cancellationToken.ThrowIfCancellationRequested();
+        /// <summary>
+        /// Acquires a lock for a given name. The returned IAsyncDisposable should be disposed to release the lock.
+        /// Best used with 'await using'.
+        /// </summary>
+        /// <param name="name">A unique name to identify the resource to be locked.</param>
+        /// <param name="cancellationToken">A cancellation token.</param>
+        /// <returns>An IAsyncDisposable object that releases the lock upon disposal.</returns>
+        public static async Task<IAsyncDisposable> AcquireAsync(string name, CancellationToken cancellationToken = default)
+        {
+            // Get or create a semaphore for the given name. This ensures that for each unique name,
+            // we are always using the same semaphore instance.
+            var semaphore = Semaphores.GetOrAdd(name, _ => new SemaphoreSlim(1, 1));
 
-		Task? mutexTask = null;
+            // Asynchronously wait to enter the semaphore.
+            await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-		var taskCompletionSource = ValueTaskSources.GetFreeTaskSource();
-		//Create the task before starting so when it starts,
-		//WaitForTask is sure to capture the non-null mutexTask.
-		mutexTask = new Task(WaitForTask, cancellationToken, TaskCreationOptions.DenyChildAttach);
-		mutexTask.Start();
-		return taskCompletionSource.GetValueTask();
+            // Return a new 'Releaser' disposable object. When it's disposed (at the end of a 'using' block),
+            // it will release the semaphore.
+            return new Releaser(semaphore);
+        }
 
-		void WaitForTask()
-		{
-			try
-			{
-				using var mutex = new Mutex(false, mutexName);
-				try
-				{
-					// Wait for either the mutex to be acquired, or cancellation
-#if LINUX
-					while (!mutex.WaitOne(10))
-					{
-						if (cancellationToken.IsCancellationRequested)
-						{
-							taskCompletionSource.SetCanceled(cancellationToken);
-							return;
-						}
-					}
-#else
-					if (WaitHandle.WaitAny([mutex, cancellationToken.WaitHandle]) != 0)
-					{
-						taskCompletionSource.SetCanceled(cancellationToken);
-						return;
-					}
-#endif
-				}
-				catch (AbandonedMutexException)
-				{ /* Abandoned by another process, we acquired it. */ }
+        /// <summary>
+        /// A private helper class that handles releasing the semaphore when disposed.
+        /// </summary>
+        private sealed class Releaser : IAsyncDisposable
+        {
+            private readonly SemaphoreSlim _semaphoreToRelease;
 
-				using var releaseEvent = new ManualResetEventSlim();
-				taskCompletionSource.SetResult(new MutexAwaiter(mutexTask!, releaseEvent));
+            internal Releaser(SemaphoreSlim semaphoreToRelease)
+            {
+                _semaphoreToRelease = semaphoreToRelease;
+            }
 
-				// Wait until the release call
-				releaseEvent.Wait(cancellationToken);
-				mutex.ReleaseMutex();
-			}
-			catch (OperationCanceledException)
-			{
-				taskCompletionSource.SetCanceled(cancellationToken);
-			}
-			catch (Exception ex)
-			{
-				taskCompletionSource.SetException(ex);
-			}
-		}
-	}
-
-	private class MutexAwaiter(Task mutexTask, ManualResetEventSlim releaseEvent) : IAsyncDisposable
-	{
-		private readonly Task _mutexTask = mutexTask;
-		private readonly ManualResetEventSlim _releaseEvent = releaseEvent;
-
-		public async ValueTask DisposeAsync()
-		{
-			_releaseEvent.Set();
-			await _mutexTask;
-		}
-	}
+            public ValueTask DisposeAsync()
+            {
+                _semaphoreToRelease.Release();
+                return default;
+            }
+        }
+    }
 }
