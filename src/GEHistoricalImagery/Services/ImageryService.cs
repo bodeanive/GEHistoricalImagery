@@ -2,6 +2,7 @@ using LibGoogleEarth;
 using LibEsri;
 using LibMapCommon;
 using LibMapCommon.Geometry;
+using GEHistoricalImagery.Cli;
 
 namespace GEHistoricalImagery.Services
 {
