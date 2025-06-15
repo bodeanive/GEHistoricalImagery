@@ -8,5 +8,4 @@ public readonly record struct TileStats(
 	int MaxRow,
 	int MinColumn,
 	int MaxColumn,
-	int TileCount,
-	bool CrossesAntimeridian);
+	int TileCount);

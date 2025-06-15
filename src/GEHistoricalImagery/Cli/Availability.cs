@@ -1,5 +1,4 @@
 ﻿using CommandLine;
-using Google.Protobuf.WellKnownTypes;
 using LibEsri;
 using LibGoogleEarth;
 using LibMapCommon;
@@ -55,7 +54,7 @@ internal class Availability : AoiVerb
 		new OptionChooser<EsriRegion>().WaitForOptions(all);
 	}
 
-	private async Task<EsriRegion[]> GetAllEsriRegions(WayBack wayBack, GeoPolygon<Wgs1984> aoi, int zoomLevel)
+	private async Task<EsriRegion[]> GetAllEsriRegions(WayBack wayBack, GeoRegion<Wgs1984> aoi, int zoomLevel)
 	{
 		int count = 0;
 		int numTiles = wayBack.Layers.Count;
@@ -102,8 +101,9 @@ internal class Availability : AoiVerb
 
 				foreach (var tile in mercAoi.GetTiles<EsriTile>(ZoomLevel))
 				{
-					var cIndex = tile.Column - stats.MinColumn;
+					var cIndex = LibMapCommon.Util.Mod(tile.Column - stats.MinColumn, 1 << tile.Level);
 					var rIndex = tile.Row - stats.MinRow;
+
 					availability[rIndex, cIndex] = regions[i].ContainsTile(tile);
 				}
 
@@ -115,14 +115,15 @@ internal class Availability : AoiVerb
 		}
 	}
 
-	private class EsriRegion(Layer layer, RegionAvailability[] regions) : IDatedOption
+	private class EsriRegion(Layer layer, RegionAvailability[] regions) : IConsoleOption
 	{
 		public Layer Layer { get; } = layer;
 		public RegionAvailability[] Availabilities { get; } = regions;
 
 		public DateOnly Date => Layer.Date;
+		public string DisplayValue => DateString(Date);
 
-		public void DrawOption()
+		public bool DrawOption()
 		{
 			if (Availabilities.Length == 1)
 			{
@@ -140,6 +141,7 @@ internal class Availability : AoiVerb
 
 				new OptionChooser<RegionAvailability>().WaitForOptions(Availabilities);
 			}
+			return false;
 		}
 	}
 
@@ -163,7 +165,7 @@ internal class Availability : AoiVerb
 		new OptionChooser<RegionAvailability>().WaitForOptions(all);
 	}
 
-	private async Task<RegionAvailability[]> GetAllDatesAsync(DbRoot root, GeoPolygon<Wgs1984> reg, int zoomLevel)
+	private async Task<RegionAvailability[]> GetAllDatesAsync(DbRoot root, GeoRegion<Wgs1984> reg, int zoomLevel)
 	{
 		int count = 0;
 		var stats = reg.GetPolygonalRegionStats<KeyholeTile>(zoomLevel);
@@ -185,7 +187,7 @@ internal class Availability : AoiVerb
 
 				var region = uniqueDates[d.Date];
 
-				var cIndex = d.Tile.Column - stats.MinColumn;
+				var cIndex = LibMapCommon.Util.Mod(d.Tile.Column - stats.MinColumn, 1 << d.Tile.Level);
 				var rIndex = stats.MaxRow - d.Tile.Row;
 
 				uniquePoints.Add(new Tuple<int, int>(rIndex, cIndex));
@@ -232,9 +234,10 @@ internal class Availability : AoiVerb
 
 	#region Common
 
-	private class RegionAvailability : IEquatable<RegionAvailability>, IDatedOption
+	private class RegionAvailability : IEquatable<RegionAvailability>, IConsoleOption
 	{
 		public DateOnly Date { get; }
+		public string DisplayValue => DateString(Date);
 		private bool?[,] Availability { get; }
 
 		public int Height => Availability.GetLength(0);
@@ -268,12 +271,13 @@ internal class Availability : AoiVerb
 			return true;
 		}
 
-		public void DrawOption()
+		public bool DrawOption()
 		{
 			var availabilityStr = $"Tile availability on {DateString(Date)}";
 			Console.WriteLine("\r\n" + availabilityStr);
 			Console.WriteLine(new string('=', availabilityStr.Length) + "\r\n");
 			DrawMap();
+			return false;
 		}
 
 		public void DrawMap()

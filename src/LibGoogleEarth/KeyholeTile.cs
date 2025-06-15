@@ -29,6 +29,7 @@ r0	|  0  |  1  |
 	/// <summary> The number of <see cref="KeyholeTile"/> rows from the bottom-most (south-most) edge of the map. </summary>
 	public int Row { get; }
 	public int Column { get; }
+	public bool RowsIncreaseToSouth => false;
 	/// <summary>  The roo quadtree node </summary>
 	public static readonly KeyholeTile Root = new("0");
 	public const int MaxLevel = 30;
@@ -111,7 +112,6 @@ r0	|  0  |  1  |
 	public Wgs1984 LowerRight => new(RowColToLatLong(Row), RowColToLatLong(Column + 1));
 	public Wgs1984 UpperLeft => new(RowColToLatLong(Row + 1), RowColToLatLong(Column));
 	public Wgs1984 UpperRight => new(RowColToLatLong(Row + 1), RowColToLatLong(Column + 1));
-	public GeoPolygon<Wgs1984> GetGeoPolygon() => new GeoPolygon<Wgs1984>([LowerLeft, UpperLeft, UpperRight, LowerRight]);
 	#endregion
 
 	#region Helpers

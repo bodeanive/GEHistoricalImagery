@@ -1,11 +1,9 @@
 ﻿using CommandLine;
-using Google.Protobuf.WellKnownTypes;
 using LibEsri;
 using LibGoogleEarth;
 using LibMapCommon;
 using LibMapCommon.Geometry;
 using OSGeo.GDAL;
-using System.Data;
 
 namespace GEHistoricalImagery.Cli;
 
@@ -99,7 +97,7 @@ internal class Download : AoiVerb
 
 		IEnumerable<Task<TileDataset<WebMercator>>> generateWork()
 		{
-			var aoi = webMerc.ToPixelPolygon(ZoomLevel);
+			var aoi = webMerc.ToPixelRegion(ZoomLevel);
 			if (LayerDate)
 			{
 				var layer = wayBack.Layers.OrderBy(l => int.Abs(l.Date.DayNumber - desiredDate.DayNumber)).First();
@@ -117,14 +115,14 @@ internal class Download : AoiVerb
 		}
 	}
 
-	private async Task<TileDataset<WebMercator>> DownloadTile(PixelPointPoly aoi, WayBack wayBack, EsriTile tile, DateOnly desiredDate)
+	private async Task<TileDataset<WebMercator>> DownloadTile(PixelRegion aoi, WayBack wayBack, EsriTile tile, DateOnly desiredDate)
 	{
 		try
 		{
 			EsriTile gotTile = tile;
 			DatedEsriTile? node;
 			while ((node = await wayBack.GetNearestDatedTileAsync(gotTile, desiredDate)) is null &&
-				tile.Level - gotTile.Level <= 2 && gotTile.Level >= 2)
+				tile.Level - gotTile.Level < 2 && gotTile.Level >= 2)
 			{
 				gotTile = EsriTile.Create(gotTile.Row / 2, gotTile.Column / 2, gotTile.Level - 1);
 			}
@@ -138,7 +136,7 @@ internal class Download : AoiVerb
 
 			if (gotTile.Level != tile.Level)
 			{
-				dataset = ResizeTile(gotTile, dataset, tile, true);
+				dataset = ResizeTile(gotTile, dataset, tile);
 				message = $"Substituting level {gotTile.Level} imagery from {DateString(node.CaptureDate)} for tile at {tile.Wgs84Center}";
 			}
 
@@ -157,11 +155,11 @@ internal class Download : AoiVerb
 		return EmptyDataset(tile);
 	}
 
-	private async Task<TileDataset<WebMercator>> DownloadTile(PixelPointPoly aoi, WayBack wayBack, EsriTile tile, Layer layer)
+	private async Task<TileDataset<WebMercator>> DownloadTile(PixelRegion aoi, WayBack wayBack, EsriTile tile, Layer layer)
 	{
 		EsriTile gotTile = tile;
 
-		while (tile.Level - gotTile.Level <= 2 && gotTile.Level >= 2)
+		while (tile.Level - gotTile.Level < 2 && gotTile.Level >= 2)
 		{
 			try
 			{
@@ -171,7 +169,7 @@ internal class Download : AoiVerb
 
 				if (gotTile.Level != tile.Level)
 				{
-					dataset = ResizeTile(gotTile, dataset, tile, true);
+					dataset = ResizeTile(gotTile, dataset, tile);
 					message = $"Substituting level {gotTile.Level} imagery from {layer.Title} for tile at {tile.Wgs84Center}";
 				}
 
@@ -206,7 +204,7 @@ internal class Download : AoiVerb
 
 		IEnumerable<Task<TileDataset<Wgs1984>>> generateWork()
 		{
-			var aoi = Region.ToPixelPolygon(ZoomLevel);
+			var aoi = Region.ToPixelRegion(ZoomLevel);
 			Console.Write("Grabbing Image Tiles: ");
 			ReportProgress(0);
 
@@ -214,15 +212,14 @@ internal class Download : AoiVerb
 		}
 	}
 
-	private async Task<TileDataset<Wgs1984>> DownloadTile(PixelPointPoly aoi, DbRoot root, KeyholeTile tile, DateOnly desiredDate)
+	private async Task<TileDataset<Wgs1984>> DownloadTile(PixelRegion aoi, DbRoot root, KeyholeTile tile, DateOnly desiredDate)
 	{
 		KeyholeTile gotTile = tile;
 		TileNode? node;
 
-		while ((node = await root.GetNodeAsync(gotTile)) is null)
+		while ((node = await root.GetNodeAsync(gotTile)) is null &&
+				tile.Level - gotTile.Level < 2 && gotTile.Level >= 2)
 		{
-			if (tile.Level - gotTile.Level > 1 || gotTile.Level < 3)
-				break;
 			gotTile = KeyholeTile.Create(gotTile.Row / 2, gotTile.Column / 2, gotTile.Level - 1);
 		}
 
@@ -238,13 +235,19 @@ internal class Download : AoiVerb
 					continue;
 
 				var dataset = OpenDataset(imageBts);
-				var message = dt.Date == desiredDate ? null : $"Substituting imagery from {DateString(dt.Date)} for tile at {tile.Wgs84Center}";
+				string? message = null;
 
 				if (gotTile.Level != tile.Level)
 				{
-					dataset = ResizeTile(gotTile, dataset, tile, false);
-					message = $"Substituting level {gotTile.Level} imagery from {DateString(dt.Date)} for tile at {tile.Wgs84Center}";
+					dataset = ResizeTile(gotTile, dataset, tile);
+					message = dt.Date == default
+						? $"Substituting level {gotTile.Level} default imagery of unknown date for tile at {tile.Wgs84Center}"
+						: $"Substituting level {gotTile.Level} imagery from {DateString(dt.Date)} for tile at {tile.Wgs84Center}";
 				}
+				else if (dt.Date != desiredDate)
+					message = dt.Date == default
+						? $"Substituting default imagery of unknown date for tile at {tile.Wgs84Center}"
+						: $"Substituting imagery from {DateString(dt.Date)} for tile at {tile.Wgs84Center}";
 
 				dataset = TrimDataset(dataset, aoi, tile);
 
@@ -266,23 +269,20 @@ internal class Download : AoiVerb
 
 	#region Common
 
-	static Dataset ResizeTile(ITile gotTile, Dataset gotDataset, ITile tile, bool rowsIncreaseSouth)
+	private const int TILE_SIZE = 256;
+	private const int NUM_BANDS = 3;
+	private static Dataset ResizeTile(ITile gotTile, Dataset gotDataset, ITile tile)
 	{
-		const int TILE_SIZE = 256;
-		const int NUM_BANDS = 3;
-
 		var dimScale = 1 << (tile.Level - gotTile.Level);
 		var diffX = tile.Column - gotTile.Column * dimScale;
 		var diffY = tile.Row - gotTile.Row * dimScale;
 
 		int side = TILE_SIZE / dimScale;
 
-		int xstart = diffX * side, xend = xstart + side;
+		int xstart = diffX * side, xend = xstart + side, ystart = diffY * side, yend = ystart + side;
 
-		//Esri tiles' Row number increases to the south, whereas keyhole tiles' Row number increases to the north.
-		(int ystart, int yend)
-			= rowsIncreaseSouth ? (diffY * side, (diffY + 1) * side)
-			: ((dimScale - diffY - 1) * side, (dimScale - diffY) * side);
+		if (!gotTile.RowsIncreaseToSouth)
+			(ystart, yend) = (TILE_SIZE - yend, TILE_SIZE - ystart);
 
 		var image = new TileImage(gotDataset);
 		var enlarged = new TileImage(TILE_SIZE, TILE_SIZE, NUM_BANDS);
@@ -306,7 +306,7 @@ internal class Download : AoiVerb
 		return enlarged.ToDataset();
 	}
 
-	private async Task Run_Common<T>(FileInfo saveFile, DateOnly desiredDate, GeoPolygon<T> region, double tileCount, IEnumerable<Task<TileDataset<T>>> generator)
+	private async Task Run_Common<T>(FileInfo saveFile, DateOnly desiredDate, GeoRegion<T> region, double tileCount, IEnumerable<Task<TileDataset<T>>> generator)
 		where T : IGeoCoordinate<T>
 	{
 		var tempFile = Path.GetTempFileName();
@@ -314,6 +314,7 @@ internal class Download : AoiVerb
 		int numTilesDownload = 0;
 		var processor = new ParallelProcessor<TileDataset<T>>(ConcurrentDownload);
 
+		using var fileLock = saveFile.Create();
 		try
 		{
 			using var image = new EarthImage<T>(region, ZoomLevel, tempFile);
@@ -333,6 +334,9 @@ internal class Download : AoiVerb
 
 			ReplaceProgress("Done!\r\n");
 			Console.WriteLine($"{numTilesDownload} out of {tileCount} downloaded");
+
+			//Release the lock for either saving or deleting
+			fileLock.Dispose();
 
 			if (numTilesDownload == 0)
 			{
@@ -371,8 +375,7 @@ internal class Download : AoiVerb
 		}
 	}
 
-
-	private Dataset TrimDataset<TTile, T>(Dataset image, PixelPointPoly aoi, ITile<TTile, T> tile)
+	private Dataset TrimDataset<T>(Dataset image, PixelRegion aoi, ITile<T> tile)
 		where T : IGeoCoordinate<T>
 	{
 		if (aoi.PolygonIntersects(tile.GetGeoPolygon().ToPixelPolygon(tile.Level)))
@@ -407,13 +410,9 @@ internal class Download : AoiVerb
 		//The jpeg driver fails when a large number of empty tiles are written.
 		//Empirically determined that three, non-zero pixels on the top and left
 		//side of each tile is enough to successfully compress the jpeg.
-		const int TILE_SIZE = 256;
-		const int NUM_BANDS = 3;
 		int pixelSpacing = (int)Math.Ceiling(TILE_SIZE / 3d);
 
-		using var memDriver = Gdal.GetDriverByName("MEM");
-		using var emptyDataset = memDriver.Create("", TILE_SIZE, TILE_SIZE, NUM_BANDS, DataType.GDT_Byte, null);
-		var image = new TileImage(emptyDataset);
+		var image = new TileImage(TILE_SIZE, TILE_SIZE, NUM_BANDS);
 		byte[] color = [0, 0, 1];
 		for (int i = 0; i < TILE_SIZE; i += pixelSpacing)
 		{
