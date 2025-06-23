@@ -18,6 +18,7 @@ GEHistoricalImagery is a utility for downloading historical aerial imagery from 
 |[download](https://github.com/Mbucari/GEHistoricalImagery/blob/master/docs/download.md)|Download historical imagery.|
 |[dump](https://github.com/Mbucari/GEHistoricalImagery/blob/master/docs/dump.md)|Dump historical image tiles into a folder.|
 
+
 **Web API**
 `http://localhost:35001`
 ``` bash
@@ -29,6 +30,8 @@ Dated Imagery at 39.630000°, -104.840000°
     date = 2020/10/03, version = 357
     date = 2023/10/20, version = 1019
 ```
+=======
+To learn about defining regions of interest for these commands, please refer to the [Regions of Interest article](https://github.com/Mbucari/GEHistoricalImagery/blob/master/docs/regions.md).
 
 ************************
 ## Build 
@@ -42,4 +45,4 @@ dotnet publish -c Release --runtime linux-arm64 --self-contained true -p:Publish
 ```
 
 ************************
-<p align="center"><i>Updated 2025/02/26</i></p>
+<p align="center"><i>Updated 2025/06/20</i></p>
