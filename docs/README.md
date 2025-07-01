@@ -46,3 +46,6 @@ dotnet publish -c Release --runtime linux-arm64 --self-contained true -p:Publish
 
 ************************
 <p align="center"><i>Updated 2025/06/20</i></p>
+
+## Deploy to EdgeOne
+[![使用 EdgeOne Pages 部署](https://cdnstatic.tencentcs.com/edgeone/pages/deploy.svg)](https://edgeone.ai/pages/new?repository-url=https://github.com/bodeanive/GEHistoricalImagery)
