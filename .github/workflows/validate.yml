@@ -3,10 +3,8 @@
 name: validate
 
 on:
-  push:
-    branches: [master]
-  pull_request:
-    branches: [master]
+  watch:
+    types: [started]
 
 jobs:
   build:
