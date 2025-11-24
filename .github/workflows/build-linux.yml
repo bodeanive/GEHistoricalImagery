@@ -64,10 +64,10 @@ jobs:
               --configuration ${{ env.DOTNET_CONFIGURATION }} \
               --output $OUTPUT \
               -p:DefineConstants=$preprocessor \
-              -p:PublishProtocol=FileSystem \
-              -p:SelfContained=true \
-              -p:PublishTrimmed=true \
-              -p:PublishSingleFile=true
+              -p:SelfContained=true `
+              -p:PublishSingleFile=true `
+              -p:IncludeAllContentForSelfExtract=false `
+              -p:SingleFileIncludeNativeLibrariesForSelfExtract=true
 
       - name: Build bundle
         id: bundle
