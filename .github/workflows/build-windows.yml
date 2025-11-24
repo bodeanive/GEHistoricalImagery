@@ -60,8 +60,7 @@ jobs:
               --configuration ${{ env.DOTNET_CONFIGURATION }} `
               --output $OUTPUT `
               -p:PublishProtocol=FileSystem `
-              -p:SelfContained=true `
-              -p:PublishAot=true
+              -p:SelfContained=true 
           
           
           Copy-Item "GEHistoricalImagery\bin\Release\gdal" "$OUTPUT\" -Force -Recurse
