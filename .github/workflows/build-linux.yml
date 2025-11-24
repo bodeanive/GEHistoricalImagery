@@ -63,8 +63,8 @@ jobs:
               --runtime $RUNTIME_ID \
               --configuration ${{ env.DOTNET_CONFIGURATION }} \
               --output $OUTPUT \
-              -p:PublishProtocol=FileSystem `
               -p:DefineConstants=$preprocessor \
+              -p:PublishProtocol=FileSystem `
               -p:SelfContained=true `
               -p:PublishSingleFile=true `
               -p:IncludeAllContentForSelfExtract=false `
