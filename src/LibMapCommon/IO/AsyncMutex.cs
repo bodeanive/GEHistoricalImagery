@@ -25,8 +25,7 @@ internal static class AsyncMutex
 				using var mutex = new Mutex(false, mutexName);
 				try
 				{
-					// Wait for either the mutex to be acquired, or cancellation
-#if LINUX
+					// Use polling + cancellation to stay compatible across platforms.
 					while (!mutex.WaitOne(10))
 					{
 						if (cancellationToken.IsCancellationRequested)
@@ -35,13 +34,6 @@ internal static class AsyncMutex
 							return;
 						}
 					}
-#else
-					if (WaitHandle.WaitAny([mutex, cancellationToken.WaitHandle]) != 0)
-					{
-						taskCompletionSource.SetCanceled(cancellationToken);
-						return;
-					}
-#endif
 				}
 				catch (AbandonedMutexException)
 				{ /* Abandoned by another process, we acquired it. */ }
