@@ -1,0 +1,26 @@
+# Build output
+**/[Bb]in/
+**/[Oo]bj/
+src/bin/
+
+# Publish packages
+*.zip
+*.tar.gz
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.rsuser
+
+# Test
+TestResults/
+*.trx
+
+# OS
+.DS_Store
+Thumbs.db

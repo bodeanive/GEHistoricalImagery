@@ -1,0 +1,115 @@
+---
+name: build
+
+on:
+  workflow_call:
+    inputs:
+      version_override:
+        type: string
+        description: Version number override
+        required: false
+      runs_on:
+        type: string
+        description: GitHub hosted runner
+        required: true
+      architecture:
+        type: string
+        description: CPU architecture targeted by the build
+        required: true
+
+env:
+  DOTNET_CONFIGURATION: Release
+  DOTNET_VERSION: 10.x
+
+jobs:
+  build:
+    name: linux-${{ inputs.architecture }}
+    runs-on: ${{ inputs.runs_on }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Get version
+        id: get_version
+        shell: bash
+        run: |
+          inputVersion="${{ inputs.version_override }}"
+          if [[ "${#inputVersion}" -gt 0 ]]; then
+            version="${inputVersion}"
+          else
+            version="$(grep -Eio -m 1 '<Version>.*</Version>' ./src/GEHistoricalImagery/GEHistoricalImagery.csproj | sed -r 's/<\/?Version>//g')"
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build
+        working-directory: ./src
+        shell: bash
+        run: |
+          RID="linux-${{ inputs.architecture }}"
+          dotnet restore \
+            GEHistoricalImagery/GEHistoricalImagery.csproj \
+            --runtime "$RID"
+
+          dotnet build \
+            GEHistoricalImagery/GEHistoricalImagery.csproj \
+            --runtime "$RID" \
+            --configuration "${{ env.DOTNET_CONFIGURATION }}" \
+            --no-restore
+
+      - name: Publish
+        id: publish
+        working-directory: ./src
+        shell: bash
+        run: |
+          RID="linux-${{ inputs.architecture }}"
+          BUNDLE_ROOT="bin/Publish/${RID}"
+          OUTPUT="${BUNDLE_ROOT}/gdal"
+
+          echo "Runtime Identifier: ${RID}"
+          echo "Output Directory: ${OUTPUT}"
+
+          dotnet publish \
+            GEHistoricalImagery/GEHistoricalImagery.csproj \
+            --runtime "$RID" \
+            --configuration "${{ env.DOTNET_CONFIGURATION }}" \
+            --output "$OUTPUT" \
+            --no-restore \
+            --no-build \
+            -p:PublishProtocol=FileSystem \
+            -p:SelfContained=true \
+            -p:PublishSingleFile=true \
+            -p:PublishTrimmed=true
+
+      - name: Bundle artifact
+        id: bundle
+        working-directory: ./src/bin/Publish/linux-${{ inputs.architecture }}
+        shell: bash
+        run: |
+          scriptfile=GEHistoricalImagery
+          cat > "${scriptfile}" <<'EOF'
+          #!/usr/bin/env bash
+          SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+          export GEHistoricalImagery_Cache="$SCRIPT_DIR/cache"
+          export GDAL_DATA="$SCRIPT_DIR/gdal"
+          export GDAL_DRIVER_PATH="$SCRIPT_DIR/gdal"
+          export PROJ_LIB="$SCRIPT_DIR/gdal"
+          "$SCRIPT_DIR/gdal/GEHistoricalImagery" "$@"
+          EOF
+          chmod +x "${scriptfile}"
+
+          artifact="GEHistoricalImagery.${{ steps.get_version.outputs.version }}-linux-${{ inputs.architecture }}.tar.gz"
+          tar -czf "../${artifact}" *
+          echo "artifact=${artifact}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ steps.bundle.outputs.artifact }}
+          path: ./src/bin/Publish/${{ steps.bundle.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 7

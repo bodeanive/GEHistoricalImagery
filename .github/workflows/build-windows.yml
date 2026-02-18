@@ -1,0 +1,109 @@
+---
+name: build
+
+on:
+  workflow_call:
+    inputs:
+      version_override:
+        type: string
+        description: Version number override
+        required: false
+      architecture:
+        type: string
+        description: CPU architecture targeted by the build
+        required: true
+
+env:
+  DOTNET_CONFIGURATION: Release
+  DOTNET_VERSION: 10.x
+
+jobs:
+  build:
+    name: win-${{ inputs.architecture }}
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Get version
+        id: get_version
+        shell: pwsh
+        run: |
+          if ("${{ inputs.version_override }}".Length -gt 0) {
+            $version = "${{ inputs.version_override }}"
+          } else {
+            $version = (Select-Xml -Path "./src/GEHistoricalImagery/GEHistoricalImagery.csproj" -XPath "/Project/PropertyGroup/Version").Node.InnerText.Trim()
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build
+        working-directory: ./src
+        shell: pwsh
+        run: |
+          $RID = "win-${{ inputs.architecture }}"
+          dotnet restore `
+            GEHistoricalImagery/GEHistoricalImagery.csproj `
+            --runtime $RID
+
+          dotnet build `
+            GEHistoricalImagery/GEHistoricalImagery.csproj `
+            --runtime $RID `
+            --configuration "${{ env.DOTNET_CONFIGURATION }}" `
+            --no-restore
+
+      - name: Publish
+        id: publish
+        working-directory: ./src
+        shell: pwsh
+        run: |
+          $RID = "win-${{ inputs.architecture }}"
+          $BUNDLE_ROOT = "bin/Publish/$RID"
+          $OUTPUT = "$BUNDLE_ROOT/gdal"
+
+          "Runtime Identifier: $RID"
+          "Output Directory: $OUTPUT"
+
+          dotnet publish `
+            GEHistoricalImagery/GEHistoricalImagery.csproj `
+            --runtime $RID `
+            --configuration "${{ env.DOTNET_CONFIGURATION }}" `
+            --output $OUTPUT `
+            --no-restore `
+            --no-build `
+            -p:PublishProtocol=FileSystem `
+            -p:SelfContained=true `
+            -p:PublishSingleFile=true
+
+          $launcherPath = Join-Path $BUNDLE_ROOT "GEHistoricalImagery.bat"
+          $launcherContent = @"
+@echo off
+set "SCRIPT_DIR=%~dp0"
+set "GEHistoricalImagery_Cache=%SCRIPT_DIR%cache"
+set "GDAL_DATA=%SCRIPT_DIR%gdal"
+set "GDAL_DRIVER_PATH=%SCRIPT_DIR%gdal"
+set "PROJ_LIB=%SCRIPT_DIR%gdal"
+"%SCRIPT_DIR%gdal\GEHistoricalImagery.exe" %*
+"@
+          Set-Content -Path $launcherPath -Value $launcherContent -Encoding ascii
+
+      - name: Zip artifact
+        id: zip
+        working-directory: ./src/bin/Publish
+        shell: pwsh
+        run: |
+          $artifact = "GEHistoricalImagery.${{ steps.get_version.outputs.version }}-win-${{ inputs.architecture }}.zip"
+          Compress-Archive -Path "win-${{ inputs.architecture }}\*" -DestinationPath $artifact
+          "artifact=$artifact" >> $env:GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ steps.zip.outputs.artifact }}
+          path: ./src/bin/Publish/${{ steps.zip.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,343 @@
+using LibEsri;
+using LibGoogleEarth;
+using LibMapCommon;
+using LibMapCommon.Geometry;
+using System.Text;
+
+namespace GEHistoricalImagery.Services.Operations;
+
+internal class Availability : AoiOperation
+{
+	public bool CompleteOnly { get; set; }
+
+	public DateOnly MinDate { get; set; }
+
+	public DateOnly MaxDate { get; set; }
+
+	public override async Task RunAsync()
+	{
+		if (AnyAoiErrors())
+			return;
+
+		if (MaxDate.DayNumber == 0)
+			MaxDate = DateOnly.FromDateTime(DateTime.Today.AddDays(1));
+
+		Console.OutputEncoding = Encoding.Unicode;
+
+		await (Provider is Provider.Wayback ? Run_Esri() : Run_Keyhole());
+	}
+
+	#region Esri
+	private async Task Run_Esri()
+	{
+		if (ConcurrentDownload > 10)
+		{
+			ConcurrentDownload = 10;
+			Console.Error.WriteLine($"Limiting to {ConcurrentDownload} concurrent scrapes of Esri metadata.");
+		}
+
+		var wayBack = await WayBack.CreateAsync(CacheDir);
+
+		Console.Write("Loading World Atlas WayBack Layer Info: ");
+
+		var all = await GetAllEsriRegions(wayBack, Region);
+		ReplaceProgress("Done!" + Environment.NewLine);
+
+		if (all.Sum(r => r.Availabilities.Length) == 0)
+		{
+			Console.Error.WriteLine($"No imagery available at zoom level {ZoomLevel}");
+			return;
+		}
+
+		foreach (var region in all)
+			region.DrawOption();
+	}
+
+	private async Task<EsriRegion[]> GetAllEsriRegions(WayBack wayBack, GeoRegion<Wgs1984> aoi)
+	{
+		//A layer date < MinDate will not have imagery captured after MinDate, but
+		//a layer date > MaxDate may still have imagery captured before MaxDate.
+		//Truncate the Layers whose layer date is older than MinDate, then search layers from
+		//oldest to newest, stopping when a layer contains no imagery captured before MaxDate
+		var layers = wayBack.Layers.Where(l => l.Date >= MinDate).OrderBy(l => l.Date).ToArray();
+
+		int count = 0;
+		int numTiles = layers.Length;
+		ReportProgress(0);
+
+		var mercAoi = aoi.ToWebMercator();
+		var stats = mercAoi.GetPolygonalRegionStats<EsriTile>(ZoomLevel);
+
+		ParallelProcessor<EsriRegion> processor = new(ConcurrentDownload);
+		List<EsriRegion> allLayers = new();
+
+		await foreach (var region in processor.EnumerateResults(layers.Select(getLayerDates)))
+		{
+			if (region.Availabilities.Any(a => a.Date <= MaxDate))
+			{
+				allLayers.Add(region);
+				ReportProgress(++count / (double)numTiles);
+			}
+			else
+			{
+				break;
+			}
+		}
+
+		//De-duplicate list
+		allLayers.Sort((a, b) => a.Layer.Date.CompareTo(b.Layer.Date));
+
+		for (int i = 1; i < allLayers.Count; i++)
+		{
+			for (int k = i - 1; k >= 0; k--)
+			{
+				if (allLayers[i].Availabilities.SequenceEqual(allLayers[k].Availabilities))
+				{
+					allLayers.RemoveAt(i--);
+					break;
+				}
+			}
+		}
+
+		return allLayers.OrderByDescending(l => l.Date).ToArray();
+
+		async Task<EsriRegion> getLayerDates(Layer layer)
+		{
+			var regions = await wayBack.GetDateRegionsAsync(layer, mercAoi, ZoomLevel);
+
+			List<RegionAvailability> displays = new(regions.Length);
+
+			for (int i = 0; i < regions.Length; i++)
+			{
+				var availability = new RegionAvailability(regions[i].Date, stats.NumRows, stats.NumColumns);
+
+				foreach (var tile in mercAoi.GetTiles<EsriTile>(ZoomLevel))
+				{
+					var cIndex = LibMapCommon.Util.Mod(tile.Column - stats.MinColumn, 1 << tile.Level);
+					var rIndex = tile.Row - stats.MinRow;
+
+					availability[rIndex, cIndex] = regions[i].ContainsTile(tile);
+				}
+
+				if (availability.HasAnyTiles() && (availability.HasAllTiles() || !CompleteOnly))
+					displays.Add(availability);
+			}
+
+			return new EsriRegion(layer, displays.OrderByDescending(d => d.Date).ToArray());
+		}
+	}
+
+	private class EsriRegion(Layer layer, RegionAvailability[] regions)
+	{
+		public Layer Layer { get; } = layer;
+		public RegionAvailability[] Availabilities { get; } = regions;
+
+		public DateOnly Date => Layer.Date;
+		public string DisplayValue => DateString(Date);
+
+		public bool DrawOption()
+		{
+			if (Availabilities.Length == 1)
+			{
+				var availabilityStr = $"Tile availability on {DateString(Layer.Date)} (captured on {DateString(Availabilities[0].Date)})";
+				Console.WriteLine(Environment.NewLine + availabilityStr);
+				Console.WriteLine(new string('=', availabilityStr.Length) + Environment.NewLine);
+
+				Availabilities[0].DrawMap();
+			}
+			else if (Availabilities.Length > 1)
+			{
+				var availabilityStr = $"Layer {Layer.Title} has imagery from {Availabilities.Length} different dates";
+				Console.WriteLine(Environment.NewLine + availabilityStr);
+				Console.WriteLine(new string('=', availabilityStr.Length) + Environment.NewLine);
+
+				foreach (var availability in Availabilities)
+					availability.DrawOption();
+			}
+			return false;
+		}
+	}
+
+	#endregion
+
+	#region Keyhole
+	private async Task Run_Keyhole()
+	{
+		var root = await DbRoot.CreateAsync(Database.TimeMachine, CacheDir);
+		Console.Write("Loading Quad Tree Packets: ");
+
+		var all = await GetAllDatesAsync(root, Region);
+		ReplaceProgress("Done!" + Environment.NewLine);
+
+		if (all.Length == 0)
+		{
+			Console.Error.WriteLine($"No dated imagery available within specified constraints");
+			return;
+		}
+
+		foreach (var availability in all)
+			availability.DrawOption();
+	}
+
+	private async Task<RegionAvailability[]> GetAllDatesAsync(DbRoot root, GeoRegion<Wgs1984> reg)
+	{
+		int count = 0;
+		var stats = reg.GetPolygonalRegionStats<KeyholeTile>(ZoomLevel);
+		ReportProgress(0);
+
+		ParallelProcessor<List<DatedTile>> processor = new(ConcurrentDownload);
+
+		Dictionary<DateOnly, RegionAvailability> uniqueDates = new();
+		HashSet<Tuple<int, int>> uniquePoints = new();
+
+		await foreach (var dSet in processor.EnumerateResults(reg.GetTiles<KeyholeTile>(ZoomLevel).Select(getDatedTiles)))
+		{
+			foreach (var d in dSet)
+			{
+				if (!uniqueDates.TryGetValue(d.Date, out RegionAvailability? region))
+				{
+					region = new RegionAvailability(d.Date, stats.NumRows, stats.NumColumns);
+					uniqueDates.Add(d.Date, region);
+				}
+
+				var cIndex = LibMapCommon.Util.Mod(d.Tile.Column - stats.MinColumn, 1 << d.Tile.Level);
+				var rIndex = stats.MaxRow - d.Tile.Row;
+
+				uniquePoints.Add(new Tuple<int, int>(rIndex, cIndex));
+				region[rIndex, cIndex] = await root.GetNodeAsync(d.Tile) is not null;
+			}
+
+			ReportProgress(++count / (double)stats.TileCount);
+		}
+
+		//Go back and mark unavailable tiles within the region of interest
+		foreach (var a in uniqueDates.Values)
+		{
+			for (int r = 0; r < a.Height; r++)
+			{
+				for (int c = 0; c < a.Width; c++)
+				{
+					if (uniquePoints.Contains(new Tuple<int, int>(r, c)) && a[r, c] is null)
+						a[r, c] = false;
+				}
+			}
+		}
+
+		return uniqueDates.Values.Where(r => r.HasAllTiles() || !CompleteOnly).OrderByDescending(r => r.Date).ToArray();
+
+		async Task<List<DatedTile>> getDatedTiles(KeyholeTile tile)
+		{
+			List<DatedTile> dates = new();
+
+			if (await root.GetNodeAsync(tile) is not TileNode node)
+				return dates;
+
+			foreach (var datedTile in node.GetAllDatedTiles().Where(d => d.Date.Year != 1 && d.Date >= MinDate && d.Date <= MaxDate))
+			{
+				if (!dates.Any(d => d.Date == datedTile.Date))
+					dates.Add(datedTile);
+			}
+			return dates;
+		}
+	}
+
+	#endregion
+
+	#region Common
+
+	private class RegionAvailability : IEquatable<RegionAvailability>
+	{
+		public DateOnly Date { get; }
+		public string DisplayValue => DateString(Date);
+		private bool?[,] Availability { get; }
+
+		public int Height => Availability.GetLength(0);
+		public int Width => Availability.GetLength(1);
+		public bool? this[int rIndex, int cIndex]
+		{
+			get => Availability[rIndex, cIndex];
+			set => Availability[rIndex, cIndex] = value;
+		}
+
+		public RegionAvailability(DateOnly date, int height, int width)
+		{
+			Date = date;
+			Availability = new bool?[height, width];
+		}
+
+		public bool HasAnyTiles() => Availability.OfType<bool>().Any(b => b);
+		public bool HasAllTiles() => Availability.OfType<bool>().All(b => b);
+
+		public static bool operator ==(RegionAvailability a, RegionAvailability b)=> a.Equals(b);
+		public static bool operator !=(RegionAvailability a, RegionAvailability b)=> !a.Equals(b);
+		public override int GetHashCode() => HashCode.Combine(Date, Availability);
+		public override bool Equals(object? obj) => Equals(obj as RegionAvailability);
+		public bool Equals(RegionAvailability? other)
+		{
+			if (other is null || other.Date != Date || other.Height != Height || other.Width != Width)
+				return false;
+
+			for (int i = 0; i < Height; i++)
+			{
+				for (int j = 0; j < Width; j++)
+				{
+					if (other.Availability[i, j] != Availability[i, j])
+						return false;
+				}
+			}
+			return true;
+		}
+
+		public bool DrawOption()
+		{
+			var availabilityStr = $"Tile availability on {DateString(Date)}";
+			Console.WriteLine(Environment.NewLine + availabilityStr);
+			Console.WriteLine(new string('=', availabilityStr.Length) + Environment.NewLine);
+			DrawMap();
+			return false;
+		}
+
+		public void DrawMap()
+		{
+			/*
+			 _________________________
+			 | Top       | TTTFFFNNN |
+			 ------------|------------
+			 | Bottom    | TFNTFNTFN |
+			 ------------|------------
+			 | Character | █▀▀▄:˙▄.  |
+			 -------------------------
+			 */
+
+			for (int y = 0; y < Height; y += 2)
+			{
+				var has2Rows = y + 1 < Height;
+				char[] row = new char[Width];
+				for (int x = 0; x < Width; x++)
+				{
+					var top = Availability[y, x];
+					if (has2Rows)
+					{
+						var bottom = Availability[y + 1, x];
+						row[x] = top is true & bottom is true ? '█' :
+							top is true ? '▀' :
+							bottom is true ? '▄' :
+							top is false & bottom is false ? ':' :
+							top is false ? '˙' :
+							bottom is false ? '.' : ' ';
+					}
+					else
+					{
+						row[x] = top is true ? '▀' :
+							top is false ? '˙' : ' ';
+					}
+				}
+
+				Console.WriteLine(new string(row));
+			}
+		}
+	}
+	#endregion
+}
+
+
