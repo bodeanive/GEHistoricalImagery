@@ -80,15 +80,15 @@ jobs:
             -p:PublishSingleFile=true
 
           $launcherPath = Join-Path $BUNDLE_ROOT "GEHistoricalImagery.bat"
-          $launcherContent = @"
-@echo off
-set "SCRIPT_DIR=%~dp0"
-set "GEHistoricalImagery_Cache=%SCRIPT_DIR%cache"
-set "GDAL_DATA=%SCRIPT_DIR%gdal"
-set "GDAL_DRIVER_PATH=%SCRIPT_DIR%gdal"
-set "PROJ_LIB=%SCRIPT_DIR%gdal"
-"%SCRIPT_DIR%gdal\GEHistoricalImagery.exe" %*
-"@
+          $launcherContent = @(
+            '@echo off'
+            'set "SCRIPT_DIR=%~dp0"'
+            'set "GEHistoricalImagery_Cache=%SCRIPT_DIR%cache"'
+            'set "GDAL_DATA=%SCRIPT_DIR%gdal"'
+            'set "GDAL_DRIVER_PATH=%SCRIPT_DIR%gdal"'
+            'set "PROJ_LIB=%SCRIPT_DIR%gdal"'
+            '"%SCRIPT_DIR%gdal\GEHistoricalImagery.exe" %*'
+          )
           Set-Content -Path $launcherPath -Value $launcherContent -Encoding ascii
 
       - name: Zip artifact
