@@ -33,13 +33,22 @@ internal abstract class OptionsBase
 			}
 			else
 			{
+				var compatibilityCache = Path.GetFullPath(PathHelper.ReplaceUnixHomeDir("./cache"));
 				try
 				{
-					_cacheDir = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, "GEHI_cache")).FullName;
+					// Keep compatibility with the previous web wrapper default cache path.
+					_cacheDir = Directory.CreateDirectory(compatibilityCache).FullName;
 				}
 				catch
 				{
-					_cacheDir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "GEHI_cache")).FullName;
+					try
+					{
+						_cacheDir = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, "GEHI_cache")).FullName;
+					}
+					catch
+					{
+						_cacheDir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "GEHI_cache")).FullName;
+					}
 				}
 			}
 			return _cacheDir;

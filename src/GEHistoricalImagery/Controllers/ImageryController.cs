@@ -138,20 +138,20 @@ public sealed class ImageryController : ControllerBase
     {
         var stdout = result.StdOut ?? string.Empty;
         var stderr = result.StdErr ?? string.Empty;
+        var exceptionText = result.Exception?.ToString() ?? string.Empty;
 
-        if (!string.IsNullOrEmpty(stdout) && !string.IsNullOrEmpty(stderr))
-            return stdout + Environment.NewLine + Environment.NewLine + stderr;
+        if (string.IsNullOrEmpty(stdout) && string.IsNullOrEmpty(stderr) && string.IsNullOrEmpty(exceptionText))
+            return "Operation failed.";
 
-        if (!string.IsNullOrEmpty(stderr))
-            return stderr;
-
+        var parts = new List<string>(3);
         if (!string.IsNullOrEmpty(stdout))
-            return stdout;
+            parts.Add(stdout);
+        if (!string.IsNullOrEmpty(stderr))
+            parts.Add(stderr);
+        if (!string.IsNullOrEmpty(exceptionText))
+            parts.Add(exceptionText);
 
-        if (result.Exception is not null)
-            return result.Exception.ToString();
-
-        return "Operation failed.";
+        return string.Join(Environment.NewLine + Environment.NewLine, parts);
     }
 
     private static bool TryParseLocation(string location, out Wgs1984 coordinate, out string errorMessage)
